@@ -617,7 +617,8 @@ public partial class DanmuViewModel : ViewModelBase
     private ITtsClient CreateTtsClient() => TtsEngine switch
     {
         "System" => new SystemSpeechTtsClient(TtsSystemVoice),
-        "Edge" => new EdgeTtsClient(TtsEdgeVoice),
+        // Edge 走 node sidecar（2026-10：MS 按 TLS 指纹拦 .NET 合成请求，node + 新域名实测可用）
+        "Edge" => new EdgeNodeTtsClient(TtsEdgeVoice),
         _ => new GptSoVitsClient(new HttpClient(), TtsServerUrl),
     };
 

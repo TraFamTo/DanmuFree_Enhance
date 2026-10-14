@@ -1,0 +1,9 @@
+{
+  "name": "danmufree-edge-tts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Edge TTS synthesis sidecar (ws only)",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

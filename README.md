@@ -36,7 +36,7 @@ B站 / 抖音直播间弹幕桌面客户端（Windows）。把弹幕 / 礼物 / 
 
 ### ② 从源码（开发者）
 
-需要 **.NET 8 SDK**；用抖音签名还需本机 **Node.js**（PATH 里有 `node`）。
+需要 **.NET 8 SDK**；抖音签名与 Edge 在线朗读的 sidecar 还需本机 **Node.js**（PATH 里有 `node`；打包分发自带，用户机无需装）。
 ```bash
 dotnet run --project src/DanmuFree.App                                   # debug 运行
 # 或双击构建产物：src/DanmuFree.App/bin/Debug/net8.0-windows/DanmuFree.exe
