@@ -48,7 +48,7 @@ SIG=$("$OUT/node/node.exe" "$OUT/sign/sign_runner.js" d41d8cd98f00b204e9800998ec
 # 同样防 Content glob 漏拷 node_modules；自检 require('ws') 可加载（离线、不联网）。
 rm -rf "$OUT/edge"
 cp -r "src/DanmuFree.App/edge" "$OUT/"
-"$OUT/node/node.exe" -e "require('$OUT/edge/node_modules/ws')" 2>/dev/null \
+"$OUT/node/node.exe" -e "require('./$OUT/edge/node_modules/ws')" 2>/dev/null \
   && echo "  Edge TTS 自检 OK（edge/edge_tts_runner.js + ws 就绪）" \
   || { echo "  Edge TTS 自检失败（edge/ 或 ws 缺失）"; exit 1; }
 
