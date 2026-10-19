@@ -30,8 +30,8 @@ function arg(name, fallback) {
 }
 
 // Sec-MS-GEC v1：unix 秒 + Windows 纪元，向下取整 300 秒，×1e7 ticks，拼 token，SHA-256 大写 hex
-function secMsGec() {
-    const ticks = BigInt(Math.floor(Date.now() / 1000 + 11644473600)) * 10000000n
+function secMsGec(unixSeconds) {
+    const ticks = BigInt(Math.floor(unixSeconds + 11644473600)) * 10000000n
     const rounded = ticks - (ticks % 3000000000n)
     return createHash('sha256').update(`${rounded}${TRUSTED_TOKEN}`, 'ascii').digest('hex').toUpperCase()
 }
@@ -40,6 +40,9 @@ function escapeXml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/'/g, '&apos;').replace(/"/g, '&quot;')
 }
+
+const dbg = (m) => { if (process.env.EDGE_TTS_DEBUG) process.stderr.write(`[dbg] ${m}
+`) }
 
 function fail(msg) {
     process.stderr.write(String(msg) + '\n')
@@ -60,41 +63,74 @@ async function main() {
     const rate = arg('rate', '+0%')
     const timeoutMs = parseInt(arg('timeout', '30000'), 10)
     const text = (await readStdin()).trim()
+    dbg(`stdin=${JSON.stringify(text)} len=${text.length}`)
     if (!text) fail('empty text')
 
-    const cid = randomUUID().replaceAll('-', '')
-    const url = `${WS_BASE}?Ocp-Apim-Subscription-Key=${TRUSTED_TOKEN}` +
-        `&Sec-MS-GEC=${secMsGec()}&Sec-MS-GEC-Version=${GEC_VERSION}&ConnectionId=${cid}`
-
-    const ws = new WebSocket(url, { headers: { 'User-Agent': UA }, origin: ORIGIN })
-    const killer = setTimeout(() => { try { ws.terminate() } catch {} fail(`timeout after ${timeoutMs}ms`) }, timeoutMs)
-
-    ws.on('error', (e) => { clearTimeout(killer); fail(`ws error: ${e.message}`) })
-    ws.on('close', (code) => { clearTimeout(killer); fail(`ws closed before turn.end (code ${code})`) })
-    ws.on('message', (data, isBinary) => {
-        if (isBinary) {
-            if (data.length < 2) return
-            const headerLen = (data[0] << 8) | data[1]
-            if (2 + headerLen > data.length) return
-            const header = data.slice(2, 2 + headerLen).toString('utf8')
-            if (header.includes('Path:audio') && !header.includes('Path:audio.metadata'))
-                process.stdout.write(data.slice(2 + headerLen)) // MP3 原样出 stdout
-            return
+    // 时钟偏差兜底：token 按 300s 桶校验，本机偏差 ~409s（实测）时会随桶相位在「能连/403」间翻转。
+    // 依次试 0/±300/±600 桶，覆盖 ±10 分钟偏差（对齐 Core.EdgeTtsClient 的 403 重试策略）。
+    const now = Math.floor(Date.now() / 1000)
+    let lastErr = 'unknown'
+    for (const offset of [0, -300, 300, -600, 600]) {
+        try {
+            dbg(`attempt offset=${offset}`)
+            await synth(voice, rate, timeoutMs, text, secMsGec(now + offset))
+            return // synth 在 turn.end 时已 exit(0)
+        } catch (e) {
+            lastErr = e && e.message ? e.message : String(e)
+            if (!/403/.test(lastErr)) break // 非 403（超时/网络）换桶无意义，直接报
         }
-        if (data.toString('utf8').includes('Path:turn.end')) {
-            clearTimeout(killer)
-            try { ws.close() } catch { }
-            process.exit(0) // 丢 frame end 事件直接退，防止 ws 'close' 处理器误报
-        }
-    })
+    }
+    fail(/403/.test(lastErr)
+        ? 'Edge TTS 握手被拒（403）：已自动尝试 ±10 分钟时间桶仍失败——本机时钟偏差可能超 10 分钟（请校准 Windows 时间），或服务端再变更。'
+        : lastErr)
+}
 
-    ws.on('open', () => {
-        const ts = new Date().toUTCString()
-        ws.send(`X-RequestId:${cid}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n` +
-            '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}')
-        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>` +
-            `<voice name='${escapeXml(voice)}'><prosody rate='${escapeXml(rate)}' pitch='+0Hz' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`
-        ws.send(`X-RequestId:${cid}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${ts}\r\nPath:ssml\r\n\r\n${ssml}`)
+function synth(voice, rate, timeoutMs, text, gec) {
+    return new Promise((resolve, reject) => {
+        const cid = randomUUID().replaceAll('-', '')
+        const url = `${WS_BASE}?Ocp-Apim-Subscription-Key=${TRUSTED_TOKEN}` +
+            `&Sec-MS-GEC=${gec}&Sec-MS-GEC-Version=${GEC_VERSION}&ConnectionId=${cid}`
+
+        const ws = new WebSocket(url, { headers: { 'User-Agent': UA }, origin: ORIGIN })
+        const killer = setTimeout(() => { try { ws.terminate() } catch {} reject(new Error(`timeout after ${timeoutMs}ms`)) }, timeoutMs)
+        let done = false
+        let pending = 0
+        // stdout 是管道 = 异步写；只有「turn.end 已到 + 全部音频块确认刷出」才退出，
+        // 否则 exit(0) 会丢未刷出的音频（实测管道下 write('') 回调会抢先触发）
+        const maybeExit = () => { if (done && pending === 0) process.exit(0) }
+
+        ws.on('error', (e) => { if (!done) { clearTimeout(killer); reject(e) } })
+        ws.on('close', () => { if (!done) { clearTimeout(killer); reject(new Error('ws closed before turn.end')) } })
+        ws.on('message', (data, isBinary) => {
+            if (process.env.EDGE_TTS_DEBUG && isBinary) dbg(`bin frame len=${data.length}`)
+            if (isBinary) {
+                if (data.length < 2) return
+                const headerLen = (data[0] << 8) | data[1]
+                if (2 + headerLen > data.length) return
+                const header = data.slice(2, 2 + headerLen).toString('utf8')
+                if (header.includes('Path:audio') && !header.includes('Path:audio.metadata')) {
+                    pending++
+                    process.stdout.write(data.slice(2 + headerLen), () => { pending--; maybeExit() })
+                }
+                return
+            }
+            dbg(`text frame: ${data.toString('utf8').slice(0, 120)}`)
+            if (data.toString('utf8').includes('Path:turn.end')) {
+                done = true
+                clearTimeout(killer)
+                try { ws.close() } catch { }
+                maybeExit()
+            }
+        })
+
+        ws.on('open', () => {
+            const ts = new Date().toUTCString()
+            ws.send(`X-RequestId:${cid}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n` +
+                '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}')
+            const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>` +
+                `<voice name='${escapeXml(voice)}'><prosody rate='${escapeXml(rate)}' pitch='+0Hz' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`
+            ws.send(`X-RequestId:${cid}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${ts}\r\nPath:ssml\r\n\r\n${ssml}`)
+        })
     })
 }
 

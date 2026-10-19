@@ -45,6 +45,9 @@ public sealed class EdgeNodeTtsClient : ITtsClient
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            // stdin 必须显式 UTF-8：默认跟随系统 ANSI 代码页（中文 Windows = GBK），
+            // node 按 UTF-8 解 → 中文全变乱码（实测 Azure 对乱码只回 105B 假音频 + turn.end）
+            StandardInputEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add(RunnerPath);
         psi.ArgumentList.Add("--voice");
