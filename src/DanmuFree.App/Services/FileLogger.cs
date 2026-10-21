@@ -15,7 +15,7 @@ public sealed class FileLogger
         "DanmuFree",
         "log.txt");
 
-    private readonly object _gate = new();
+    private static readonly object Gate = new();
 
     public void Info(string message) => Write("INFO ", message);
 
@@ -24,9 +24,11 @@ public sealed class FileLogger
 
     private void Write(string level, string message)
     {
-        lock (_gate)
+        lock (Gate)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            if (File.Exists(LogPath) && new FileInfo(LogPath).Length >= 2 * 1024 * 1024)
+                File.Move(LogPath, LogPath + ".1", overwrite: true);
             File.AppendAllText(
                 LogPath,
                 $"{DateTime.Now:HH:mm:ss} [{level}] {message}{Environment.NewLine}");

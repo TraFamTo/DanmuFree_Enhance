@@ -64,17 +64,43 @@
     <Border Grid.Row="0" Background="#CC1E1E1E" Padding="8,3"
             PreviewMouseLeftButtonDown="OnBackgroundMouseDown"
             Style="{StaticResource DimWhenFloating}">
-      <StackPanel Orientation="Horizontal">
+      <WrapPanel>
         <TextBlock VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#FFCCCCCC" FontSize="12">
           <Run Text="在线 "/><Run Text="{Binding OnlineCount}" Foreground="#FF4FC3F7" FontWeight="Bold"/>
         </TextBlock>
         <TextBlock VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#FFCCCCCC" FontSize="12">
           <Run Text="看过 "/><Run Text="{Binding WatchedCount}" Foreground="#FFC1FF" FontWeight="Bold"/>
         </TextBlock>
-        <TextBlock VerticalAlignment="Center" Foreground="#FFCCCCCC" FontSize="12">
+        <TextBlock VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#FFCCCCCC" FontSize="12">
           <Run Text="赞 "/><Run Text="{Binding LikesCount}" Foreground="#FFFF8A80" FontWeight="Bold"/>
         </TextBlock>
-      </StackPanel>
+        <TextBlock VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#FFCCCCCC" FontSize="12"
+                   ToolTip="{Binding IncomeTooltip}">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsBilibili}" Value="False">
+                  <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+          <Run Text="收入（已记录） "/><Run Text="{Binding IncomeText}" Foreground="#FFFFD54F" FontWeight="Bold"/>
+        </TextBlock>
+        <TextBlock VerticalAlignment="Center" Foreground="#FFCCCCCC" FontSize="12"
+                   ToolTip="本场直播累计时长（小时:分钟:秒）；开播状态每分钟同步">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsBilibili}" Value="False">
+                  <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+          <Run Text="开播时长 "/><Run Text="{Binding LiveDurationText}" Foreground="#FFA5D6A7" FontWeight="Bold"/>
+        </TextBlock>
+      </WrapPanel>
     </Border>
 
     <!-- 弹幕区：背景层拖动靠这里。隧道事件 PreviewMouseLeftButtonDown 先于 ListBox 处理。

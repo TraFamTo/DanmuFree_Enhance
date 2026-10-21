@@ -11,6 +11,16 @@ public class MessageParserTests
 
     static BiliPacket Op5(string json) => new(5, Encoding.UTF8.GetBytes(json));
 
+    [Theory]
+    [InlineData("1234567890123", 1234567890123L)]
+    [InlineData("\"1234567890123\"", 1234567890123L)]
+    [InlineData("0", null)]
+    public void Danmu_keeps_real_uid_for_room_management(string uid, long? expected)
+    {
+        var json = """{"cmd":"DANMU_MSG","info":[[],"hello",[UID,"alice"],[0,""]]}""".Replace("UID", uid);
+        Assert.Equal(expected, _parser.Parse(Op5(json))!.UserId);
+    }
+
     [Fact]
     public void Heartbeat_reply_op3_parses_online_count()
     {

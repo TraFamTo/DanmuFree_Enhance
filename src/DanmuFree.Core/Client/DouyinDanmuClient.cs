@@ -24,6 +24,7 @@ public sealed class DouyinDanmuClient
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    private Task? _connectionLoop;
     private string _userUniqueId = "";
 
     public event Action<RichMessage>? MessageReceived;
@@ -49,19 +50,23 @@ public sealed class DouyinDanmuClient
         _log?.Invoke($"抖音房间解析：web_rid={webRid}, room_id={info.RoomId}（{info.RoomId.Length}位），" +
                      $"ttwid={(string.IsNullOrEmpty(info.Ttwid) ? "空（WS 握手会失败）" : "已获取")}");
         SetState(ConnectionState.Connecting);
-        await ConnectInternal(info, _cts.Token);
+        _connectionLoop = ConnectInternal(info, _cts.Token);
+        await _connectionLoop;
     }
 
     public async Task DisconnectAsync()
     {
         _cts?.Cancel();
-        if (_ws is not null && _ws.State == WebSocketState.Open)
-            await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
+        _ws?.Abort();
+        try { await (_connectionLoop ?? Task.CompletedTask); } catch { }
         try { await (_loop ?? Task.CompletedTask); } catch { }
         _ws?.Dispose();
         _ws = null;
         _cts?.Dispose();
         _cts = null;
+        _loop = _connectionLoop = null;
+        _http.Dispose();
+        MessageReceived = null; ConnectionStateChanged = null; StatsUpdated = null;
         SetState(ConnectionState.Disconnected);
     }
 
@@ -88,8 +93,14 @@ public sealed class DouyinDanmuClient
 
                 SetState(ConnectionState.Connected);
                 attempt = 0;
-                _loop = Task.Run(() => HeartbeatLoop(ct));
-                await ReceiveLoop(ct);
+                using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                _loop = HeartbeatLoop(heartbeatCts.Token);
+                try { await ReceiveLoop(ct); }
+                finally
+                {
+                    heartbeatCts.Cancel();
+                    try { await _loop; } catch (OperationCanceledException) { }
+                }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception e) { _log?.Invoke($"抖音 连接异常，第 {attempt + 1} 次重连：{e.Message}"); }

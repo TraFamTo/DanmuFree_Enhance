@@ -26,9 +26,11 @@ public sealed class BilibiliDanmuClient
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    private Task? _connectionLoop;
 
     public event Action<RichMessage>? MessageReceived;
     public event Action<ConnectionState>? ConnectionStateChanged;
+    public event Action<int>? RoomResolved;
 
     public BilibiliDanmuClient() { }
 
@@ -36,22 +38,27 @@ public sealed class BilibiliDanmuClient
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _log = log;
-        var resolver = new RoomResolver(new HttpClient(), cookie, log);
+        using var http = new HttpClient();
+        var resolver = new RoomResolver(http, cookie, log);
         var info = await resolver.ResolveAsync(roomId, _cts.Token);
+        RoomResolved?.Invoke(info.RoomId);
         SetState(ConnectionState.Connecting);
-        await ConnectInternal(info, _cts.Token);
+        _connectionLoop = ConnectInternal(info, _cts.Token);
+        await _connectionLoop;
     }
 
     public async Task DisconnectAsync()
     {
         _cts?.Cancel();
-        if (_ws is not null && _ws.State == WebSocketState.Open)
-            await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
+        _ws?.Abort(); // 主动打断收包，不等待服务器关闭握手。
+        try { await (_connectionLoop ?? Task.CompletedTask); } catch { }
         try { await (_loop ?? Task.CompletedTask); } catch { }
         _ws?.Dispose();
         _ws = null;
         _cts?.Dispose();
         _cts = null;
+        _loop = _connectionLoop = null;
+        MessageReceived = null; ConnectionStateChanged = null; RoomResolved = null;
         SetState(ConnectionState.Disconnected);
     }
 
@@ -70,8 +77,14 @@ public sealed class BilibiliDanmuClient
                 SetState(ConnectionState.Connected);
                 attempt = 0;
 
-                _loop = Task.Run(() => HeartbeatLoop(ct));
-                await ReceiveLoop(ct);
+                using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                _loop = HeartbeatLoop(heartbeatCts.Token);
+                try { await ReceiveLoop(ct); }
+                finally
+                {
+                    heartbeatCts.Cancel();
+                    try { await _loop; } catch (OperationCanceledException) { }
+                }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception e) { _log?.Invoke($"B站 连接异常，第 {attempt + 1} 次重连：{e.Message}"); }
@@ -111,7 +124,7 @@ public sealed class BilibiliDanmuClient
     private async Task ReceiveLoop(CancellationToken ct)
     {
         var buffer = new byte[16 * 1024];
-        var acc = new MemoryStream();
+        using var acc = new MemoryStream();
         while (!ct.IsCancellationRequested && _ws!.State == WebSocketState.Open)
         {
             var result = await _ws.ReceiveAsync(buffer, ct);

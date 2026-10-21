@@ -64,6 +64,8 @@ public sealed class MessageParser
             "ONLINE_GUEST_COUNT" => ParseOnlineGuestCount(root, now),
             "ONLINE_RANK_COUNT" => ParseOnlineRankCount(root, now),
             "WATCHED_CHANGE" => ParseWatchedChange(root, now),
+            "LIVE" => ParseLiveState(root, now, true),
+            "PREPARING" => ParseLiveState(root, now, false),
             _ => null,
         });
     }
@@ -84,7 +86,9 @@ public sealed class MessageParser
             if (!string.IsNullOrEmpty(medalName))
                 medal = $"{medalName}·{info[3][0].GetInt32()}";
         }
-        return new RichMessage(MessageType.Danmu, user, text, null, now, medal);
+        var uidElement = info[2][0];
+        long? uid = long.TryParse(uidElement.ToString(), out var parsedUid) && parsedUid > 0 ? parsedUid : null;
+        return new RichMessage(MessageType.Danmu, user, text, null, now, medal, UserId: uid);
     }
 
     static RichMessage? ParseSendGift(JsonElement root, DateTime now)
@@ -94,7 +98,10 @@ public sealed class MessageParser
             d.GetProperty("uname").GetString() ?? "",
             "",
             $"{d.GetProperty("giftName").GetString()} x{d.GetProperty("num").GetInt32()}",
-            now);
+            now, Revenue: GiftRevenue(ReadString(d, "coin_type"), ReadLong(d, "total_coin"),
+                ReadLong(d, "price"), ReadLong(d, "num"),
+                GiftTransactionId(d, root),
+                ReadLong(d, "giftId"), UnixTime(ReadLong(d, "timestamp"))));
     }
 
     // 上舰/续费（舰长/提督/总督）按礼物路由：显示进通知窗、朗读走礼物聚合器（「xx 送了 舰长」）。
@@ -106,7 +113,7 @@ public sealed class MessageParser
             d.GetProperty("username").GetString() ?? "",
             "",
             $"{d.GetProperty("gift_name").GetString()} x{d.GetProperty("num").GetInt32()}",
-            now);
+            now, Revenue: GuardRevenue(d, root));
     }
 
     static RichMessage? ParseSuperChat(JsonElement root, DateTime now)
@@ -116,8 +123,71 @@ public sealed class MessageParser
             d.GetProperty("user_info").GetProperty("uname").GetString() ?? "",
             d.GetProperty("message").GetString() ?? "",
             $"¥{d.GetProperty("price").GetInt32()}",
-            now);
+            now, Revenue: new BiliRevenue(Math.Max(0, ReadLong(d, "price") ?? 0) / 2m,
+                ReadString(d, "id") is { } id ? "sc:" + id : null,
+                UnixTime(ReadLong(d, "start_time"))));
     }
+
+    // 协议中的 gold 金瓜子：100 金瓜子 = 1 电池，1000 金瓜子 = 1 元。
+    // 按用户指定公式电池 / 10 / 2，等价于金瓜子 / 2000。
+    static BiliRevenue? GiftRevenue(string? coin, long? total, long? price, long? count,
+        string? tid, long? giftId, DateTimeOffset? paidAt)
+    {
+        if (coin != "gold") return null;
+        decimal amount = total is >= 0 ? total.Value
+            : price is >= 0 && count is > 0 ? (decimal)price.Value * count.Value : 0;
+        return new BiliRevenue(amount / 2000m,
+            string.IsNullOrEmpty(tid) ? null : $"gift:{tid}:{giftId}", paidAt);
+    }
+
+    static BiliRevenue? GuardRevenue(JsonElement data, JsonElement root)
+    {
+        var price = ReadLong(data, "price");
+        var count = ReadLong(data, "num");
+        if (price is not >= 0 || count is not > 0) return null;
+        string? id = ReadString(root, "msg_id");
+        if (id is null && ReadLong(data, "start_time") is { } start && ReadLong(data, "uid") is { } uid)
+            id = $"{uid}:{ReadLong(data, "gift_id")}:{start}:{ReadLong(data, "end_time")}:{count}";
+        return new BiliRevenue((decimal)price.Value * count.Value / 2000m,
+            id is null ? null : "guard:" + id, UnixTime(ReadLong(data, "start_time")));
+    }
+
+    static string? GiftTransactionId(JsonElement data, JsonElement root)
+    {
+        if (ReadString(data, "tid") is { Length: > 0 } tid) return tid;
+        // rnd 有时只是时间戳，必须带 UID，避免不同用户同秒送礼被误判为重复。
+        if (ReadString(data, "rnd") is { Length: > 0 } rnd && ReadLong(data, "uid") is { } uid)
+            return $"rnd:{uid}:{rnd}";
+        return ReadString(root, "msg_id");
+    }
+
+    static RichMessage ParseLiveState(JsonElement root, DateTime now, bool live)
+    {
+        var sent = ReadLong(root, "send_time");
+        var sourceTime = sent is > 0 && sent <= DateTimeOffset.MaxValue.ToUnixTimeMilliseconds()
+            ? DateTimeOffset.FromUnixTimeMilliseconds(sent.Value) : (DateTimeOffset?)null;
+        return new RichMessage(live ? MessageType.LiveStarted : MessageType.LiveEnded, "",
+            !live && ReadLong(root, "round") == 1 ? "轮播中" : "", null, now,
+            SourceTime: sourceTime, BroadcastStartedAt: live ? UnixTime(ReadLong(root, "live_time")) : null);
+    }
+
+    static long? ReadLong(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var value)) return null;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var n)) return n;
+        return value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), out n) ? n : null;
+    }
+
+    static string? ReadString(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var value)) return null;
+        return value.ValueKind == JsonValueKind.String ? value.GetString()
+            : value.ValueKind == JsonValueKind.Number ? value.GetRawText() : null;
+    }
+
+    static DateTimeOffset? UnixTime(long? seconds) => seconds is > 0
+        && seconds <= DateTimeOffset.MaxValue.ToUnixTimeSeconds()
+        ? DateTimeOffset.FromUnixTimeSeconds(seconds.Value) : null;
 
     static RichMessage? ParseOnlineGuestCount(JsonElement root, DateTime now)
     {
@@ -161,15 +231,23 @@ public sealed class MessageParser
         if (uname.Length == 0 || gifts.Count == 0) return Array.Empty<RichMessage>();
         var list = new RichMessage[gifts.Count];
         for (int k = 0; k < gifts.Count; k++)
-            list[k] = new RichMessage(MessageType.Gift, uname, "", $"{gifts[k].name} x{gifts[k].num}", now);
+        {
+            var gift = gifts[k];
+            list[k] = new RichMessage(MessageType.Gift, uname, "", $"{gift.Name} x{gift.Num}", now,
+                Revenue: GiftRevenue(gift.CoinType, gift.TotalCoin, gift.Price, gift.Num,
+                    gift.Tid, gift.Id, UnixTime(gift.Timestamp)));
+        }
         return list;
     }
 
     // 解码 SEND_GIFT_V2 的 data.pb：顶层只取 f2(uname, string) 与 f10(gift_item, 重复 submessage)，其余跳过。
-    static (string uname, List<(string name, int num)> gifts) DecodeGiftV2Pb(byte[] pb)
+    private sealed record GiftV2Item(string Name, int Num, long? Id, long? Price,
+        long? TotalCoin, string? CoinType, string? Tid, long? Timestamp);
+
+    static (string uname, List<GiftV2Item> gifts) DecodeGiftV2Pb(byte[] pb)
     {
         string uname = "";
-        var gifts = new List<(string name, int num)>();
+        var gifts = new List<GiftV2Item>();
         int i = 0;
         while (i < pb.Length)
         {
@@ -195,10 +273,12 @@ public sealed class MessageParser
         return (uname, gifts);
     }
 
-    // gift_list 单项：只取 f2(gift_name, string) 与 f3(num, varint)；其余（gift_id/price/gift_info 等）跳过。
-    static (string name, int num) DecodeGiftV2Item(ReadOnlySpan<byte> item)
+    // gift_list 单项同时读取收入字段：f1=id / f5=单价 / f7=实付总额 / f8=币种 / f9=交易号 / f10=时间。
+    static GiftV2Item DecodeGiftV2Item(ReadOnlySpan<byte> item)
     {
         string name = ""; int num = 0;
+        long? id = null, price = null, total = null, timestamp = null;
+        string? coin = null, tid = null;
         int i = 0;
         while (i < item.Length)
         {
@@ -208,6 +288,13 @@ public sealed class MessageParser
             {
                 if (!TryReadVarint(item, ref i, out ulong v)) break;
                 if (field == 3) num = v > int.MaxValue ? int.MaxValue : (int)v;
+                if (v <= long.MaxValue)
+                {
+                    if (field == 1) id = (long)v;
+                    if (field == 5) price = (long)v;
+                    if (field == 7) total = (long)v;
+                    if (field == 10) timestamp = (long)v;
+                }
             }
             else if (wt == 2)
             {
@@ -215,13 +302,15 @@ public sealed class MessageParser
                 int l = (int)len;
                 if (l < 0 || i + l > item.Length) break;
                 if (field == 2) name = Encoding.UTF8.GetString(item.Slice(i, l));
+                if (field == 8) coin = Encoding.UTF8.GetString(item.Slice(i, l));
+                if (field == 9) tid = Encoding.UTF8.GetString(item.Slice(i, l));
                 i += l;
             }
             else if (wt == 5) { if (i + 4 > item.Length) break; i += 4; }
             else if (wt == 1) { if (i + 8 > item.Length) break; i += 8; }
             else break;
         }
-        return (name, num);
+        return new GiftV2Item(name, num, id, price, total, coin, tid, timestamp);
     }
 
     // varint 读取（ReadOnlySpan 重载，供 gift_list 子消息解码；字节数组版本见下）。

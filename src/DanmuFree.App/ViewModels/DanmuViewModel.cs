@@ -17,11 +17,20 @@ public partial class DanmuViewModel : ViewModelBase
 {
     private readonly SettingsService _settings = new();
     private readonly FileLogger _log = new();
+    private readonly LiveSessionHistoryService _liveHistory = new();
+    private BiliLiveSession? _biliSession;
+    private bool _liveHistoryDirty;
     private BilibiliDanmuClient? _client;
     private DouyinDanmuClient? _douyinClient;
     private DouyinSigner? _douyinSigner;   // node 签名 sidecar（懒构造，抖音连接时才用）
     private UiBatchPump? _pump;
     private UiBatchPump? _notifyPump;
+    private Task _pumpTask = Task.CompletedTask;
+    private Task _notifyPumpTask = Task.CompletedTask;
+    private Task _statsTask = Task.CompletedTask;
+    private HttpClient? _statsHttp;
+    private bool _disconnecting;
+    public RoomManagementViewModel Management { get; } = new();
     // 1s 常开 tick：TTL 裁剪（消息按到达序追加，过期必为前缀，从头批量删）+ UI 泵丢弃计数落日志。成本≈0。
     private readonly DispatcherTimer _expireTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private StatsService? _stats;
@@ -66,6 +75,14 @@ public partial class DanmuViewModel : ViewModelBase
     [ObservableProperty] private string _onlineCount = "-";
     [ObservableProperty] private string _watchedCount = "-";
     [ObservableProperty] private string _likesCount = "-";
+    [ObservableProperty] private string _liveDurationText = "-";
+    [ObservableProperty] private string _controlLiveDurationText = "-";
+    [ObservableProperty] private string _controlLiveDurationTooltip = "未开播时优先读取主播账号自己的 B站后台历史记录；失败时使用本地记录。";
+    [ObservableProperty] private string _incomeText = "-";
+    [ObservableProperty] private string _controlIncomeLabel = "收入（已记录） ";
+    [ObservableProperty] private string _controlIncomeText = "-";
+    [ObservableProperty] private string _controlIncomeTooltip = "直播中显示本程序记录的收入；未开播时读取上次直播的后台收入。";
+    [ObservableProperty] private string _incomeTooltip = "按付费礼物、上舰和 SC 的价格合计折算 50%；仅统计本程序接收并保存的消息。";
 
     // 显示设置（实时绑定到窗口）
     [ObservableProperty] private bool _topmost;
@@ -295,8 +312,56 @@ public partial class DanmuViewModel : ViewModelBase
 
     private void OnSecondTick()
     {
+        UpdateLiveDuration();
+        SaveLiveHistory();
         TrimExpired();
         LogUiDrops();
+    }
+
+    private void UpdateLiveDuration()
+    {
+        var now = DateTimeOffset.UtcNow;
+        LiveDurationText = _biliSession?.DurationText(now) ?? "-";
+        ControlLiveDurationText = _biliSession?.ControlDurationText(now) ?? "-";
+        ControlLiveDurationTooltip = _biliSession?.LastDurationFromHistory == true
+            ? "上次直播时长来自 B站主播后台的开播、下播时间，已保存到本地。"
+            : "未开播时优先读取主播账号自己的 B站后台历史记录；没有可用结果时使用本地记录。约=轮询估计，至少=缺少确切下播时间。";
+        IncomeText = _biliSession?.LiveStatus == 1
+            ? _biliSession.IncomeYuan.ToString("\u00a50.00", System.Globalization.CultureInfo.InvariantCulture) : "-";
+        ControlIncomeLabel = _biliSession?.LiveStatus == 0 ? "上次总收入（后台） " : "收入（已记录） ";
+        ControlIncomeText = _biliSession?.ControlIncomeText() ?? "-";
+    }
+
+    private void ActivateBiliRoom(int roomId)
+    {
+        _biliSession = _liveHistory.Get(roomId);
+        UpdateIncomeTooltip();
+    }
+
+    private void UpdateIncomeTooltip()
+    {
+        var since = _biliSession?.IncomeObservedSince?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+        IncomeTooltip = $"按付费礼物、上舰和 SC 的价格合计折算 50%。本场记录开始：{since ?? "等待房间状态"}。"
+            + "仅累计接收到的消息，未补齐连接前或断线期间的数据；实际结算以 B站为准。";
+        ControlIncomeTooltip = _biliSession?.LiveStatus == 0
+            ? "对应所示上次直播场次，读取 B站后台的人民币总收益，不再额外扣半。每分钟刷新，成功值自动保存；未取到时显示暂无数据。"
+            : IncomeTooltip;
+    }
+
+    private void SaveLiveHistory()
+    {
+        if (_liveHistoryDirty && _liveHistory.Save()) _liveHistoryDirty = false;
+    }
+
+    private void ResetLiveDuration()
+    {
+        SaveLiveHistory();
+        _biliSession = null;
+        LiveDurationText = "-";
+        ControlLiveDurationText = "-";
+        IncomeText = "-";
+        ControlIncomeText = "-";
+        ControlIncomeLabel = "收入（已记录） ";
     }
 
     // 丢弃可见化：UiBatchPump 的 Channel(2000, DropOldest) 丢过东西就落日志（30s 节流）。
@@ -353,19 +418,25 @@ public partial class DanmuViewModel : ViewModelBase
     [RelayCommand]
     private async Task ConnectAsync()
     {
+        if (_disconnecting) return;
         // 按平台取房间号 + client。抖音匿名（无 Cookie），在线人数走 WS 推送（WebcastRoomUserSeqMessage）。
         bool douyin = Platform == Platform.Douyin;
         string room = douyin ? DouyinRoomId.Trim() : RoomIdInput.Trim();
         if (string.IsNullOrWhiteSpace(room)) return;
 
-        _cts = new CancellationTokenSource();
+        if (_cts is not null) await DisconnectAsync();
+        var connectionCts = new CancellationTokenSource();
+        _cts = connectionCts;
+        ResetLiveDuration();
         // 换房间重连：清掉「已收到 WS 真实统计」标记，新房间从轮询值起步、等推送到达后接管。
         _hasRealOnline = false;
         _hasRealWatched = false;
         _pump = new UiBatchPump(Messages, MaxMessages);
         _notifyPump = new UiBatchPump(NotifyMessages, MaxMessages);
-        _ = _pump.RunAsync(_cts.Token);
-        _ = _notifyPump.RunAsync(_cts.Token);
+        _pump.BatchAppended += Management.RecordMessage;
+        _pumpTask = _pump.RunAsync(connectionCts.Token);
+        _notifyPumpTask = _notifyPump.RunAsync(connectionCts.Token);
+        if (TtsEnabled) EnsureTtsSpeaker();
         Status = "连接中…";
         try
         {
@@ -373,27 +444,43 @@ public partial class DanmuViewModel : ViewModelBase
             {
                 _douyinSigner ??= new DouyinSigner();
                 _douyinClient = new DouyinDanmuClient(new HttpClient(), _douyinSigner, m => _log.Error(m));
-                _douyinClient.MessageReceived += OnMessageReceived;
-                _douyinClient.ConnectionStateChanged += OnStateChanged;
-                _douyinClient.StatsUpdated += OnDouyinStats;
-                await _douyinClient.ConnectAsync(room, _cts.Token);
+                var douyinToken = connectionCts.Token;
+                _douyinClient.MessageReceived += m => OnMessageReceived(m, douyinToken);
+                _douyinClient.ConnectionStateChanged += state => { if (!douyinToken.IsCancellationRequested) OnStateChanged(state); };
+                _douyinClient.StatsUpdated += stats => OnDouyinStats(stats, douyinToken);
+                await _douyinClient.ConnectAsync(room, connectionCts.Token);
             }
             else
             {
                 _client = new BilibiliDanmuClient();
-                _client.MessageReceived += OnMessageReceived;
-                _client.ConnectionStateChanged += OnStateChanged;
-                _stats = new StatsService(new HttpClient(), Cookie);
-                _stats.Updated += OnStatsUpdated;
-                _ = _stats.StartAsync(room, _cts.Token);
-                await _client.ConnectAsync(room, Cookie, _cts.Token, m => _log.Error(m));
+                var biliToken = connectionCts.Token;
+                var connectionCookie = Cookie;
+                _client.RoomResolved += roomId => Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    if (biliToken.IsCancellationRequested) return;
+                    ActivateBiliRoom(roomId);
+                    _ = Management.AttachAsync(roomId, connectionCookie ?? "", biliToken);
+                });
+                _client.MessageReceived += m => OnBiliMessage(m, biliToken);
+                _client.ConnectionStateChanged += state =>
+                {
+                    if (!biliToken.IsCancellationRequested) OnStateChanged(state);
+                };
+                _statsHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+                _stats = new StatsService(_statsHttp, connectionCookie);
+                var statsToken = connectionCts.Token;
+                _stats.Updated += s => OnStatsUpdated(s, statsToken);
+                _statsTask = _stats.StartAsync(room, connectionCts.Token);
+                await _client.ConnectAsync(room, connectionCookie, connectionCts.Token, m => _log.Error(m));
             }
         }
         catch (Exception e)
         {
+            // 旧房间的连接任务退出时，不得取消或清空刚开始的新房间记录。
+            if (!ReferenceEquals(_cts, connectionCts) || connectionCts.IsCancellationRequested) return;
             // 连接失败（房间无效 / 缺 node / 网络 / 签名失败）：提示而非崩。client 内部重连循环已由 ct 取消。
-            _cts?.Cancel();
             _log.Error($"连接失败：{e.Message}", e);
+            await DisconnectAsync();
             Status = $"连接失败：{e.Message}";
         }
     }
@@ -401,15 +488,43 @@ public partial class DanmuViewModel : ViewModelBase
     [RelayCommand]
     private async Task DisconnectAsync()
     {
-        if (_douyinClient is not null) { await _douyinClient.DisconnectAsync(); _douyinClient = null; }
-        if (_client is not null) { await _client.DisconnectAsync(); _client = null; }
-        _cts?.Cancel();
+        if (_disconnecting) return;
+        _disconnecting = true;
+        Status = "正在断开并清理…";
+        var source = _cts;
+        _cts = null;
+        source?.Cancel();
+        Management.Detach();
+        _pump?.Dispose(); _notifyPump?.Dispose();
+        _statsHttp?.Dispose();
+        StopTts();
+        ResetLiveDuration();
+        try
+        {
+            if (_douyinClient is not null) await _douyinClient.DisconnectAsync();
+            if (_client is not null) await _client.DisconnectAsync();
+            await Task.WhenAll(_pumpTask, _notifyPumpTask, _statsTask);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _douyinClient = null; _client = null;
+            _pump = null; _notifyPump = null; _stats = null; _statsHttp = null;
+            _pumpTask = _notifyPumpTask = _statsTask = Task.CompletedTask;
+            source?.Dispose();
+            Messages.Clear(); NotifyMessages.Clear();
+            OnlineCount = WatchedCount = LikesCount = "-";
+            _hasRealOnline = _hasRealWatched = false;
+            _lastLoggedDrops = 0;
+            _disconnecting = false;
+        }
         Status = "已断开";
     }
 
 
-    private void OnMessageReceived(RichMessage m)
+    private void OnMessageReceived(RichMessage m, CancellationToken token)
     {
+        if (token.IsCancellationRequested) return;
         if (m.Type == MessageType.OnlineCount)
             return; // B站 op3 人气口径实测失真（7777 房间心跳恒 1），弃用；抖音在线走 StatsUpdated
         // B站 WS 实时统计（2026-09）：ONLINE_RANK_COUNT=真实在线人数（每 2~5s 推）、WATCHED_CHANGE=看过累计。
@@ -419,14 +534,14 @@ public partial class DanmuViewModel : ViewModelBase
         {
             _hasRealOnline = true;
             if (long.TryParse(m.Extra, out var online))
-                Application.Current.Dispatcher.InvokeAsync(() => OnlineCount = NumberFormatter.Format(online));
+                Application.Current.Dispatcher.InvokeAsync(() => { if (!token.IsCancellationRequested) OnlineCount = NumberFormatter.Format(online); });
             return;
         }
         if (m.Type == MessageType.WatchedCount)
         {
             _hasRealWatched = true;
             if (long.TryParse(m.Extra, out var watched))
-                Application.Current.Dispatcher.InvokeAsync(() => WatchedCount = NumberFormatter.Format(watched));
+                Application.Current.Dispatcher.InvokeAsync(() => { if (!token.IsCancellationRequested) WatchedCount = NumberFormatter.Format(watched); });
             return;
         }
         // 朗读（独立第三管道，在任何显示路由之前；DropOldest 永不阻塞收弹幕主路径）
@@ -460,26 +575,56 @@ public partial class DanmuViewModel : ViewModelBase
         _pump?.TryWrite(m);
     }
 
+    private void OnBiliMessage(RichMessage message, CancellationToken token)
+    {
+        if (token.IsCancellationRequested) return;
+        // 收入与显示、朗读开关独立，原始事件先计数；重连重放由稳定交易 ID 去重。
+        if (message.Revenue is not null || message.Type is MessageType.LiveStarted or MessageType.LiveEnded)
+            Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (token.IsCancellationRequested || _biliSession is null) return;
+                var at = message.SourceTime ?? DateTimeOffset.UtcNow;
+                if (message.Type == MessageType.LiveStarted)
+                    _biliSession.Observe(1, message.BroadcastStartedAt, at);
+                else if (message.Type == MessageType.LiveEnded)
+                    _biliSession.Observe(message.Text == "轮播中" ? 2 : 0, null, at,
+                        exactEnd: message.SourceTime is not null);
+                if (message.Revenue is { } revenue) _biliSession.AddRevenue(revenue);
+                _liveHistoryDirty = true;
+                UpdateLiveDuration();
+                UpdateIncomeTooltip();
+            });
+        if (message.Type is not (MessageType.LiveStarted or MessageType.LiveEnded)) OnMessageReceived(message, token);
+    }
+
     // B站 WS 是否已推过真实在线/看过（RealOnlineCount/WatchedCount）——置位后 60s 轮询不覆盖对应字段。
     private bool _hasRealOnline;
     private bool _hasRealWatched;
 
-    private void OnStatsUpdated(RoomStats s)
+    private void OnStatsUpdated(RoomStats s, CancellationToken token)
     {
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
+            if (token.IsCancellationRequested) return;
             if (!_hasRealOnline) OnlineCount = NumberFormatter.Format(s.Online);   // 轮询值=人气值，仅作 fallback
             if (!_hasRealWatched) WatchedCount = NumberFormatter.Format(s.Watched);
             LikesCount = NumberFormatter.Format(s.Likes);
+            if (s.RoomId is { } roomId) ActivateBiliRoom(roomId);
+            _biliSession?.Observe(s.LiveStatus, s.LiveStartedAt, s.ObservedAt ?? DateTimeOffset.UtcNow);
+            if (s.LastBroadcast is { } lastBroadcast) _biliSession?.ApplyHistory(lastBroadcast);
+            _liveHistoryDirty = _biliSession is not null;
+            UpdateLiveDuration();
+            UpdateIncomeTooltip();
         });
     }
 
     // 抖音统计（WS 推送）：在线（raw，本地格式化）/ 累计看过（服务端已格式化串如「1.3万」，直接显示）；
     // 点赞总数抖音不推，保持「-」。
-    private void OnDouyinStats(DouyinRoomStats s)
+    private void OnDouyinStats(DouyinRoomStats s, CancellationToken token)
     {
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
+            if (token.IsCancellationRequested) return;
             if (s.Online is long o) OnlineCount = NumberFormatter.Format(o);
             if (!string.IsNullOrEmpty(s.Watched)) WatchedCount = s.Watched;
         });
@@ -498,6 +643,7 @@ public partial class DanmuViewModel : ViewModelBase
 
     public void SaveSettings()
     {
+        SaveLiveHistory();
         _settings.Save(new AppSettings
         {
             Cookie = Cookie,

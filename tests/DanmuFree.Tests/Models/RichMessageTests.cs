@@ -15,9 +15,10 @@ public class RichMessageTests
     }
 
     [Fact]
-    public void MessageType_has_seven_kinds()
+    public void MessageType_keeps_existing_values_and_adds_live_lifecycle_events()
     {
-        // Danmu/Gift/Interact/SuperChat/OnlineCount + RealOnlineCount/WatchedCount（B站 WS 实时统计推送）。
-        Assert.Equal(7, Enum.GetNames<MessageType>().Length);
+        Assert.Equal(6, (int)MessageType.WatchedCount);
+        Assert.Contains(MessageType.LiveStarted, Enum.GetValues<MessageType>());
+        Assert.Contains(MessageType.LiveEnded, Enum.GetValues<MessageType>());
     }
 }

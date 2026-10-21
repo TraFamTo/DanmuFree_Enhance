@@ -21,6 +21,7 @@ public sealed class UiBatchPump : IDisposable
     private readonly int _max;
     private long _written;   // 入队累计（收包线程递增）
     private long _read;      // 出队累计（泵循环递增）
+    private volatile bool _disposed;
     private readonly Channel<RichMessage> _channel =
         Channel.CreateBounded<RichMessage>(new BoundedChannelOptions(2000)
         { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
@@ -34,6 +35,7 @@ public sealed class UiBatchPump : IDisposable
     /// <summary>入队一条（.NET 8 的 BoundedChannel 无 ItemDropped 回调，靠计数差算丢弃）。</summary>
     public bool TryWrite(RichMessage m)
     {
+        if (_disposed) return false;
         Interlocked.Increment(ref _written);
         return _channel.Writer.TryWrite(m);
     }
@@ -80,7 +82,10 @@ public sealed class UiBatchPump : IDisposable
             var snapshot = batch.ToArray();
             var dispatcher = Application.Current?.Dispatcher;
             if (dispatcher is null) break;
-            await dispatcher.InvokeAsync(() => Apply(snapshot), DispatcherPriority.Background);
+            await dispatcher.InvokeAsync(() =>
+            {
+                if (!ct.IsCancellationRequested && !_disposed) Apply(snapshot);
+            }, DispatcherPriority.Background);
         }
     }
 
@@ -94,5 +99,5 @@ public sealed class UiBatchPump : IDisposable
         }
     }
 
-    public void Dispose() => _channel.Writer.TryComplete();
+    public void Dispose() { _disposed = true; _channel.Writer.TryComplete(); }
 }

@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:conv="clr-namespace:DanmuFree.App.Converters"
         xmlns:vm="clr-namespace:DanmuFree.App.ViewModels"
+        xmlns:views="clr-namespace:DanmuFree.App.Views"
         Title="控制" Width="360" Height="640"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -66,11 +67,21 @@
         <TextBlock Text="{Binding Status}" Foreground="#FFCCCCCC" Margin="0,0,0,6"/>
 
         <!-- 统计 -->
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+        <WrapPanel Margin="0,0,0,8">
           <TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FFCCCCCC"><Run Text="在线 "/><Run Text="{Binding OnlineCount}" Foreground="#FF4FC3F7"/></TextBlock>
           <TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FFCCCCCC"><Run Text="看过 "/><Run Text="{Binding WatchedCount}" Foreground="#FFC1FF"/></TextBlock>
-          <TextBlock VerticalAlignment="Center" Foreground="#FFCCCCCC"><Run Text="赞 "/><Run Text="{Binding LikesCount}" Foreground="#FFFF8A80"/></TextBlock>
-        </StackPanel>
+          <TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FFCCCCCC"><Run Text="赞 "/><Run Text="{Binding LikesCount}" Foreground="#FFFF8A80"/></TextBlock>
+          <TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FFCCCCCC"
+                     Visibility="{Binding IsBilibili, Converter={StaticResource BoolToVis}}"
+                     ToolTip="{Binding ControlIncomeTooltip}">
+            <Run Text="{Binding ControlIncomeLabel}"/><Run Text="{Binding ControlIncomeText}" Foreground="#FFFFD54F"/>
+          </TextBlock>
+          <TextBlock VerticalAlignment="Center" Foreground="#FFCCCCCC" TextWrapping="Wrap"
+                     Visibility="{Binding IsBilibili, Converter={StaticResource BoolToVis}}"
+                     ToolTip="{Binding ControlLiveDurationTooltip}">
+            <Run Text="开播时长 "/><Run Text="{Binding ControlLiveDurationText}" Foreground="#FFA5D6A7"/>
+          </TextBlock>
+        </WrapPanel>
 
         <!-- 设置：分 TAB —— 弹幕 / 进场·关注 -->
         <TabControl Background="#FF1E1E1E" Padding="0" Margin="0,0,0,6">
@@ -127,7 +138,7 @@
                 <CheckBox Content="显示账号信息" IsChecked="{Binding ShowUserInfo}" Foreground="#FFCCCCCC" Margin="0,4"/>
                 <CheckBox Content="显示勋章" IsChecked="{Binding ShowMedal}" Foreground="#FFCCCCCC" Margin="0,4"/>
                 <CheckBox Content="显示时间" IsChecked="{Binding ShowTime}" Foreground="#FFCCCCCC" Margin="0,4"/>
-                <CheckBox Content="显示在线/看过/赞" IsChecked="{Binding ShowStats}" Foreground="#FFCCCCCC" Margin="0,4"
+                <CheckBox Content="显示统计条" IsChecked="{Binding ShowStats}" Foreground="#FFCCCCCC" Margin="0,4"
                           ToolTip="弹幕窗顶部统计条；关闭后整条收起、弹幕区占满全窗"/>
 
                 <!-- 用户名 / 弹幕 文本样式（字体 + 颜色，各自独立可配） -->
@@ -404,6 +415,12 @@
                 <TextBlock Text="典型用法：常问的问题（怎么加好友/几点下播）配一句固定答复；口号/梗配一段音效。改动即时生效，随设置自动保存" Foreground="#FF888888" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,6"/>
               </StackPanel>
             </ScrollViewer>
+          </TabItem>
+          <TabItem Header="房管管理" Visibility="{Binding IsBilibili, Converter={StaticResource BoolToVis}}">
+            <views:RoomAdminPanel DataContext="{Binding Management}"/>
+          </TabItem>
+          <TabItem Header="禁言管理" Visibility="{Binding IsBilibili, Converter={StaticResource BoolToVis}}">
+            <views:RoomBanPanel DataContext="{Binding Management}"/>
           </TabItem>
         </TabControl>
 

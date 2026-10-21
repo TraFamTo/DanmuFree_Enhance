@@ -56,8 +56,15 @@ public sealed class DouyinSigner : IDouyinSigner
         var stderrTask = p.StandardError.ReadToEndAsync();
         // 首次签名冷启动较慢：node + jsdom 模块加载，加上 Windows Defender 首次扫描 node.exe/jsdom，
         // 慢机可达 30~40s（实测朋友机首次 >20s 超时、重试才成功）。故放宽到 45s，首次就过、免重连。
-        var exited = await Task.Run(() => p.WaitForExit(45_000), ct);
-        if (!exited) { try { p.Kill(); } catch { } throw new TimeoutException("node 签名超时（>45s）"); }
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        try { await p.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException)
+        {
+            try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { }
+            if (ct.IsCancellationRequested) throw;
+            throw new TimeoutException("node 签名超时（>45s）");
+        }
 
         var sig = (await stdoutTask).Trim();
         var err = await stderrTask;
