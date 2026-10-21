@@ -1,4 +1,4 @@
-# DanmuFree
+# DanmuFree_Enhance
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
@@ -13,7 +13,7 @@ B站 / 抖音直播间弹幕桌面客户端（Windows）。把弹幕 / 礼物 / 
 
 ## 项目来源
 
-本项目基于 [SoraYjy/DanmuFree](https://github.com/SoraYjy/DanmuFree) 修改，原作者为 **Sora（SoraYjy）**。本次开发以原项目 v1.0.10 对应的提交 [`5fec53f`](https://github.com/SoraYjy/DanmuFree/commit/5fec53f) 为基础，面向主播在自己的 B站直播间使用，增加直播统计和房间管理功能。
+本项目 **DanmuFree_Enhance** 基于 [SoraYjy/DanmuFree](https://github.com/SoraYjy/DanmuFree) 修改，原作者为 **Sora（SoraYjy）**。本次开发以原项目 v1.0.10 对应的提交 [`5fec53f`](https://github.com/SoraYjy/DanmuFree/commit/5fec53f) 为基础，面向主播在自己的 B站直播间使用，增加直播统计和房间管理功能。
 
 原项目提供 B站 / 抖音弹幕连接、悬浮窗口、通知、弹幕朗读及定向回复等基础功能。本仓库在此基础上扩展，沿用 **MIT 许可证**，保留原作者版权声明，详见 [LICENSE](LICENSE)。
 
