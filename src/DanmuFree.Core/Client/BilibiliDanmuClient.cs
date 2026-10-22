@@ -27,6 +27,7 @@ public sealed class BilibiliDanmuClient
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private Task? _connectionLoop;
+    private long _anchorUid;
 
     public event Action<RichMessage>? MessageReceived;
     public event Action<ConnectionState>? ConnectionStateChanged;
@@ -41,6 +42,7 @@ public sealed class BilibiliDanmuClient
         using var http = new HttpClient();
         var resolver = new RoomResolver(http, cookie, log);
         var info = await resolver.ResolveAsync(roomId, _cts.Token);
+        _anchorUid = info.AnchorUid;
         RoomResolved?.Invoke(info.RoomId);
         SetState(ConnectionState.Connecting);
         _connectionLoop = ConnectInternal(info, _cts.Token);
@@ -58,6 +60,7 @@ public sealed class BilibiliDanmuClient
         _cts?.Dispose();
         _cts = null;
         _loop = _connectionLoop = null;
+        _anchorUid = 0;
         MessageReceived = null; ConnectionStateChanged = null; RoomResolved = null;
         SetState(ConnectionState.Disconnected);
     }
@@ -137,7 +140,9 @@ public sealed class BilibiliDanmuClient
             {
                 // ParseAll：一帧可产出多条（SEND_GIFT_V2 的 gift_list 重复字段）。
                 foreach (var msg in _parser.ParseAll(p))
-                    MessageReceived?.Invoke(msg);
+                    MessageReceived?.Invoke(msg.Type == MessageType.Danmu
+                        ? msg with { Identity = (msg.Identity ?? new BiliUserIdentity()).ForRoom(msg.UserId, _anchorUid) }
+                        : msg);
             }
             acc.SetLength(0);
             if (!rem.IsEmpty) acc.Write(rem.Span); // 保留半包

@@ -48,6 +48,7 @@ public sealed class MessageParser
         if (!root.TryGetProperty("cmd", out var cmdEl)) return Array.Empty<RichMessage>();
         var cmd = cmdEl.GetString() ?? "";
         var now = DateTime.Now;
+        if (cmd.StartsWith("DANMU_MSG:", StringComparison.Ordinal)) cmd = "DANMU_MSG";
         // INTERACT_WORD 与升级版 INTERACT_WORD_V2（直播流现发 V2）共用解析；V1=data.type，V2=data.msg_type，
         // 两者都读，且兼容带后缀的 cmd（如 INTERACT_WORD_V2@xxx）。
         if (cmd.StartsWith("INTERACT_WORD", StringComparison.Ordinal))
@@ -72,24 +73,41 @@ public sealed class MessageParser
 
     static RichMessage? ParseDanmu(JsonElement root, DateTime now)
     {
-        var info = root.GetProperty("info");
-        // info[1] is the danmu text (plain string per live B站 protocol);
-        // info[2] = [uid, username, …].
-        var text = info[1].GetString() ?? "";
-        var user = info[2][1].GetString() ?? "";
-        // info[3] = [medal_level(int), medal_name(string), anchor_name, room_id, …];
-        // absent or [0,""] when the user wears no 粉丝勋章.
-        string? medal = null;
-        if (info.GetArrayLength() > 3 && info[3].GetArrayLength() > 1)
-        {
-            var medalName = info[3][1].GetString();
-            if (!string.IsNullOrEmpty(medalName))
-                medal = $"{medalName}·{info[3][0].GetInt32()}";
-        }
-        var uidElement = info[2][0];
-        long? uid = long.TryParse(uidElement.ToString(), out var parsedUid) && parsedUid > 0 ? parsedUid : null;
-        return new RichMessage(MessageType.Danmu, user, text, null, now, medal, UserId: uid);
+        if (!root.TryGetProperty("info", out var info)) return null;
+        var text = ArrayString(info, 1);
+        var userInfo = ArrayElement(info, 2);
+        var user = ArrayString(userInfo, 1);
+        if (text is null || user is null) return null;
+        long? uid = ArrayLong(userInfo, 0) is > 0 and var id ? id : null;
+        var medalInfo = ArrayElement(info, 3);
+        FansMedal? medal = null;
+        if (ArrayString(medalInfo, 1) is { Length: > 0 } name
+            && ArrayLong(medalInfo, 0) is > 0 and <= int.MaxValue and var level)
+            medal = new FansMedal(name, (int)level, ArrayColor(medalInfo, 4),
+                ArrayColor(medalInfo, 7), ArrayColor(medalInfo, 8), ArrayColor(medalInfo, 9),
+                ArrayLong(medalInfo, 3), IsLit: ArrayLong(medalInfo, 11) != 0);
+        // info[3][10] describes the worn medal's room; only info[7] is this room's guard status.
+        var guard = ArrayLong(info, 7) is >= 1 and <= 3 and var guardLevel ? (int)guardLevel : 0;
+        var identity = new BiliUserIdentity(medal, guard, IsAdmin: ArrayLong(userInfo, 2) == 1);
+        return new RichMessage(MessageType.Danmu, user, text, null, now,
+            medal is null ? null : $"{medal.Name}·{medal.Level}", UserId: uid, Identity: identity);
     }
+
+    static JsonElement ArrayElement(JsonElement array, int index) =>
+        array.ValueKind == JsonValueKind.Array && array.GetArrayLength() > index ? array[index] : default;
+
+    static string? ArrayString(JsonElement array, int index) =>
+        ArrayElement(array, index) is var value && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    static long? ArrayLong(JsonElement array, int index)
+    {
+        var value = ArrayElement(array, index);
+        return value.ValueKind is JsonValueKind.Number or JsonValueKind.String
+            && long.TryParse(value.ToString(), out var number) ? number : null;
+    }
+
+    static int? ArrayColor(JsonElement array, int index) =>
+        ArrayLong(array, index) is >= 0 and <= 0xFFFFFF and var color ? (int)color : null;
 
     static RichMessage? ParseSendGift(JsonElement root, DateTime now)
     {

@@ -15,7 +15,8 @@
     <c:MessageTypeToBrushConverter x:Key="TypeBrush"/>
     <c:OpacityToBackgroundConverter x:Key="OpacityToBg"/>
     <c:TimeIfShownConverter x:Key="TimeIfShown"/>
-    <DataTemplate DataType="{x:Type m:RichMessage}">
+    <c:MedalIfShownConverter x:Key="MedalIfShown"/>
+    <DataTemplate x:Key="ClassicMessage">
       <!-- 描边容器：Thickness=DanmuOutlineDepth（描边关时 0，视觉无变化）；文字原色/绑定不受影响 -->
       <controls:OutlineHost
           Stroke="{Binding DataContext.DanmuOutlineColor, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -30,7 +31,14 @@
               </MultiBinding>
             </Run.Text>
           </Run>
-          <Run Text="{Binding Medal}" Foreground="#FFFFD54F"/><Run Text=" "/>
+          <Run Foreground="#FFFFD54F">
+            <Run.Text>
+              <MultiBinding Converter="{StaticResource MedalIfShown}">
+                <Binding Path="Medal"/>
+                <Binding Path="DataContext.ShowMedal" RelativeSource="{RelativeSource AncestorType=Window}"/>
+              </MultiBinding>
+            </Run.Text>
+          </Run>
           <Run Text="{Binding UserName}"
                FontFamily="{Binding DataContext.UserNameFontFamily, RelativeSource={RelativeSource AncestorType=Window}}"
                Foreground="{Binding DataContext.UserNameColor, RelativeSource={RelativeSource AncestorType=Window}}"/><Run Text=": "/>
@@ -40,6 +48,27 @@
           <Run Text="{Binding Extra}" FontWeight="Bold"/>
         </TextBlock>
       </controls:OutlineHost>
+    </DataTemplate>
+    <DataTemplate x:Key="EnhancedMessage">
+      <controls:DanmuMessageView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type m:RichMessage}">
+      <ContentControl Content="{Binding}" HorizontalContentAlignment="Stretch" Focusable="False">
+        <ContentControl.Style>
+          <Style TargetType="ContentControl">
+            <Setter Property="ContentTemplate" Value="{StaticResource ClassicMessage}"/>
+            <Style.Triggers>
+              <MultiDataTrigger>
+                <MultiDataTrigger.Conditions>
+                  <Condition Binding="{Binding DataContext.IsBilibili, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+                  <Condition Binding="{Binding DataContext.UseEnhancedDanmuStyle, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+                </MultiDataTrigger.Conditions>
+                <Setter Property="ContentTemplate" Value="{StaticResource EnhancedMessage}"/>
+              </MultiDataTrigger>
+            </Style.Triggers>
+          </Style>
+        </ContentControl.Style>
+      </ContentControl>
     </DataTemplate>
     <!-- 统计条样式：悬浮时变淡 + 鼠标穿透（悬浮时也显示，只更透、不挡操作）；ShowStats 关时整条收起 -->
     <Style x:Key="DimWhenFloating" TargetType="FrameworkElement">
@@ -125,6 +154,21 @@
                VirtualizingStackPanel.ScrollUnit="Pixel"
                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
         <ListBox.Resources>
+          <Style TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="3,1"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+              <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                  <Border Padding="{TemplateBinding Padding}" Background="Transparent">
+                    <ContentPresenter HorizontalAlignment="Stretch"/>
+                  </Border>
+                </ControlTemplate>
+              </Setter.Value>
+            </Setter>
+          </Style>
           <!-- 悬浮时滚动条透明占位（不改变视口宽度，避免虚拟化列表 re-realize 抖动）；非悬浮正常显示便于回看 -->
           <Style TargetType="ScrollBar">
             <Style.Triggers>

@@ -17,4 +17,5 @@ public sealed record RichMessage(
     BiliRevenue? Revenue = null,
     DateTimeOffset? SourceTime = null,
     DateTimeOffset? BroadcastStartedAt = null,
-    long? UserId = null);
+    long? UserId = null,
+    BiliUserIdentity? Identity = null);

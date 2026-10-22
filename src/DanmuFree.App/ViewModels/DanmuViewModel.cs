@@ -104,6 +104,9 @@ public partial class DanmuViewModel : ViewModelBase
 
     // 粉丝勋章开关
     [ObservableProperty] private bool _showMedal = true;
+    [ObservableProperty] private bool _useEnhancedDanmuStyle = true;
+    [ObservableProperty] private bool _showGuardBadge = true;
+    [ObservableProperty] private bool _showRoleBadge = true;
 
     // 弹幕时间戳开关
     [ObservableProperty] private bool _showTime = true;
@@ -198,6 +201,9 @@ public partial class DanmuViewModel : ViewModelBase
         NotifyExpireSeconds = s.NotifyExpireSeconds;
         ShowUserInfo = s.ShowUserInfo;
         ShowMedal = s.ShowMedal;
+        UseEnhancedDanmuStyle = s.UseEnhancedDanmuStyle;
+        ShowGuardBadge = s.ShowGuardBadge;
+        ShowRoleBadge = s.ShowRoleBadge;
         ShowTime = s.ShowTime;
         ShowStats = s.ShowStats;
         // 字体默认继承全局 FontFamily，颜色给区分色（用户名浅蓝、弹幕白）
@@ -571,7 +577,6 @@ public partial class DanmuViewModel : ViewModelBase
             _notifyPump?.TryWrite(m);
             return;
         }
-        if (!ShowMedal && m.Medal is not null) m = m with { Medal = null };
         _pump?.TryWrite(m);
     }
 
@@ -662,6 +667,9 @@ public partial class DanmuViewModel : ViewModelBase
             FontSize = FontSize,
             ShowUserInfo = ShowUserInfo,
             ShowMedal = ShowMedal,
+            UseEnhancedDanmuStyle = UseEnhancedDanmuStyle,
+            ShowGuardBadge = ShowGuardBadge,
+            ShowRoleBadge = ShowRoleBadge,
             ShowTime = ShowTime,
             ShowStats = ShowStats,
             UserNameFontFamily = UserNameFontFamily,

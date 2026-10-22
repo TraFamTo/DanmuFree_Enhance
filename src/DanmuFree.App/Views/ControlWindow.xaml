@@ -136,7 +136,21 @@
                 </StackPanel>
                 <TextBlock Text="保留秒数设 0 = 不自动消失；两窗各自独立设置" Foreground="#FF888888" FontSize="11" Margin="0,0,0,6"/>
                 <CheckBox Content="显示账号信息" IsChecked="{Binding ShowUserInfo}" Foreground="#FFCCCCCC" Margin="0,4"/>
-                <CheckBox Content="显示勋章" IsChecked="{Binding ShowMedal}" Foreground="#FFCCCCCC" Margin="0,4"/>
+                <Border Background="#FF263245" CornerRadius="6" Padding="8" Margin="0,6"
+                        Visibility="{Binding IsBilibili, Converter={StaticResource BoolToVis}}">
+                  <StackPanel>
+                    <CheckBox Content="直播姬风格（圆角消息卡片）" IsChecked="{Binding UseEnhancedDanmuStyle}"
+                              Foreground="#FFE3EBF8" Margin="0,2"
+                              ToolTip="关闭可切回原版紧凑文字样式；仅作用于 B站弹幕窗"/>
+                    <CheckBox Content="显示航海徽章（舰长 / 提督 / 总督）" IsChecked="{Binding ShowGuardBadge}"
+                              Foreground="#FFCCCCCC" Margin="0,4,0,2"/>
+                    <CheckBox Content="显示主播 / 房管徽章与昵称强调" IsChecked="{Binding ShowRoleBadge}"
+                              Foreground="#FFCCCCCC" Margin="0,2"/>
+                    <TextBlock Text="徽章在直播姬风格中显示，可同时展示房管与航海身份。" TextWrapping="Wrap"
+                               Foreground="#FF9CACBF" FontSize="11" Margin="0,4,0,0"/>
+                  </StackPanel>
+                </Border>
+                <CheckBox Content="显示粉丝灯牌及等级" IsChecked="{Binding ShowMedal}" Foreground="#FFCCCCCC" Margin="0,4"/>
                 <CheckBox Content="显示时间" IsChecked="{Binding ShowTime}" Foreground="#FFCCCCCC" Margin="0,4"/>
                 <CheckBox Content="显示统计条" IsChecked="{Binding ShowStats}" Foreground="#FFCCCCCC" Margin="0,4"
                           ToolTip="弹幕窗顶部统计条；关闭后整条收起、弹幕区占满全窗"/>

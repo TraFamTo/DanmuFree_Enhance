@@ -30,6 +30,9 @@ public sealed class AppSettings
 
     // 粉丝勋章开关
     public bool ShowMedal { get; set; } = true;
+    public bool UseEnhancedDanmuStyle { get; set; } = true;
+    public bool ShowGuardBadge { get; set; } = true;
+    public bool ShowRoleBadge { get; set; } = true;
 
     // 弹幕时间戳开关
     public bool ShowTime { get; set; } = true;

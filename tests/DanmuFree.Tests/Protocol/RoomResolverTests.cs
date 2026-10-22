@@ -31,6 +31,7 @@ public class RoomResolverTests
         Assert.Equal("ABC", info.Token);
         Assert.Equal("wss://broadcast-msg.chat.bilibili.com:443/sub", info.WssUrl);
         Assert.Equal(0, info.Uid); // 匿名
+        Assert.Equal(555, info.AnchorUid); // 房主身份来自房间，不是登录 Cookie。
     }
 
     [Fact]
@@ -47,6 +48,22 @@ public class RoomResolverTests
 
         Assert.Equal(555, info.Uid);
         Assert.Equal("BBB", info.Buvid3);
+    }
+
+    [Theory]
+    [InlineData("555", 555L)]
+    [InlineData("\"555\"", 555L)]
+    [InlineData("null", 0L)]
+    public async Task Owner_uid_is_independent_of_login_and_optional(string owner, long expected)
+    {
+        var handler = new FakeHttpHandler()
+            .When("getInfoByRoom", """{"code":0,"data":{"room_info":{"room_id":7777,"uid":OWNER}}}""".Replace("OWNER", owner))
+            .When("web-interface/nav", NavJson)
+            .When("getDanmuInfo", DanmuInfoJson);
+        var info = await new RoomResolver(new HttpClient(handler), "DedeUserID=42")
+            .ResolveAsync("123", CancellationToken.None);
+        Assert.Equal(42, info.Uid);
+        Assert.Equal(expected, info.AnchorUid);
     }
 
     [Fact]

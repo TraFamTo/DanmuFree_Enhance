@@ -5,4 +5,4 @@ namespace DanmuFree.Core.Protocol;
 /// short id), the danmu auth token, the websocket URL to connect to, plus the identity
 /// fields (buvid3 / uid) parsed from the user cookie.
 /// </summary>
-public sealed record RoomInfo(int RoomId, string Token, string WssUrl, string? Buvid3, long Uid);
+public sealed record RoomInfo(int RoomId, string Token, string WssUrl, string? Buvid3, long Uid, long AnchorUid = 0);

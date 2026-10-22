@@ -48,21 +48,22 @@ public sealed class RoomResolver
         _log?.Invoke($"B站 cookie 字段：SESSDATA={Has(_cookie, "SESSDATA")}, DedeUserID={Has(_cookie, "DedeUserID")}, " +
                      $"bili_jct={Has(_cookie, "bili_jct")}, buvid3={(buvid3 is null ? "无" : "有")}；解析出 uid={uid}");
 
-        int realId = await GetRealRoomId(roomIdInput, ct);
+        var (realId, anchorUid) = await GetRealRoomId(roomIdInput, ct);
         _log?.Invoke($"B站 真实房间号解析成功：{roomIdInput} → {realId}");
         var (token, wss) = await GetDanmu(realId, ct);
         _log?.Invoke("B站 弹幕服务获取成功：token 有，wss 地址已拿到");
-        return new RoomInfo(realId, token, wss, buvid3, uid);
+        return new RoomInfo(realId, token, wss, buvid3, uid, anchorUid);
     }
 
-    private async Task<int> GetRealRoomId(string roomId, CancellationToken ct)
+    private async Task<(int RoomId, long AnchorUid)> GetRealRoomId(string roomId, CancellationToken ct)
     {
         // 房间号为数字，无需 URL 编码（System.Web 在 net8.0 不可用）。
         // B站已弃用 getRoomInfoOld（统一返回 code:-400），改用 getInfoByRoom，
         // 其真实房间号在 data.room_info.room_id（多嵌套一层 room_info）。
         using var resp = await _http.GetAsync(
             $"https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom?room_id={roomId}", ct);
-        var root = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct)).RootElement;
+        using var document = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        var root = document.RootElement;
         if (root.TryGetProperty("code", out var codeEl) && codeEl.TryGetInt32(out var code) && code != 0)
         {
             if (code == -352)
@@ -74,7 +75,11 @@ public sealed class RoomResolver
             && data.TryGetProperty("room_info", out var ri)
             && ri.TryGetProperty("room_id", out var ridEl)
             && ridEl.TryGetInt32(out var real))
-            return real;
+        {
+            var anchorUid = ri.TryGetProperty("uid", out var owner)
+                && long.TryParse(owner.ToString(), out var ownerUid) && ownerUid > 0 ? ownerUid : 0;
+            return (real, anchorUid);
+        }
 
         // code=0 但缺 room_info.room_id：cookie 过期 / 被风控 / 房间异常等。给人话提示，而不是裸 KeyNotFoundException。
         throw new InvalidOperationException("房间解析失败：B站返回数据异常。cookie 可能已过期或被风控，请重新扫码登录后重试。");
